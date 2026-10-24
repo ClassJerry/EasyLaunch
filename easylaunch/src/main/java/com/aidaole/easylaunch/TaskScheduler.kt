@@ -1,14 +1,12 @@
 package com.aidaole.easylaunch
 
 import android.util.Log
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -37,14 +35,14 @@ internal class TaskScheduler {
     private val isRunning = AtomicBoolean(false)
 
     /**
-     * 待执行的任务队列
-     */
-    private val pendingTasks = ConcurrentLinkedQueue<TaskNode>()
-
-    /**
      * 正在执行的任务数量
      */
     private val runningTaskCount = AtomicInteger(0)
+
+    /**
+     * 本轮调度的完成信号
+     */
+    private var completionSignal = CompletableDeferred<Unit>()
     
     /**
      * 任务完成回调
@@ -97,13 +95,19 @@ internal class TaskScheduler {
             
             // 构建任务依赖关系
             taskGraph.buildDependencies()
-            
-            // 初始化待执行任务队列
-            pendingTasks.clear()
-            pendingTasks.addAll(taskGraph.getRootNodes())
 
-            // 开始执行任务
-            executeAllTasks()
+            // 初始化本轮调度的执行计数与完成信号
+            runningTaskCount.set(0)
+            completionSignal = CompletableDeferred()
+
+            // 提交所有根任务，后续由任务完成事件驱动
+            val rootNodes = taskGraph.getRootNodes()
+            if (rootNodes.isNotEmpty()) {
+                rootNodes.forEach { dispatch(it) }
+
+                // 等待所有任务执行完成
+                completionSignal.await()
+            }
             
             // 打印所有任务执行时间
             printTaskExecutionTimes()
@@ -114,37 +118,13 @@ internal class TaskScheduler {
     }
 
     /**
-     * 执行所有任务
+     * 提交一个就绪任务
+     * 只负责启动，不等待其执行结束
      */
-    private suspend fun executeAllTasks() {
-        // 当还有待执行的任务或者正在执行的任务时，继续执行
-        while (pendingTasks.isNotEmpty() || runningTaskCount.get() > 0) {
-            // 获取所有可以执行的任务
-            val tasksToExecute = mutableListOf<TaskNode>()
-            while (pendingTasks.isNotEmpty()) {
-                val task = pendingTasks.poll() ?: break
-                tasksToExecute.add(task)
-            }
-
-            if (tasksToExecute.isEmpty()) {
-                // 如果没有可执行的任务，但还有正在执行的任务，等待一下
-                if (runningTaskCount.get() > 0) {
-                    withContext(Dispatchers.IO) {
-                        Thread.sleep(10)
-                    }
-                }
-                continue
-            }
-
-            // 并行执行所有可执行的任务
-            val deferreds = tasksToExecute.map { taskNode ->
-                scope.async {
-                    executeTask(taskNode)
-                }
-            }
-
-            // 等待所有任务执行完成
-            deferreds.awaitAll()
+    private fun dispatch(taskNode: TaskNode) {
+        runningTaskCount.incrementAndGet()
+        scope.launch {
+            executeTask(taskNode)
         }
     }
 
@@ -158,7 +138,6 @@ internal class TaskScheduler {
         try {
             // 更新任务状态
             taskNode.status = TaskStatus.RUNNING
-            runningTaskCount.incrementAndGet()
 
             Log.d(TAG, "开始执行任务: ${task.name}")
 
@@ -187,10 +166,10 @@ internal class TaskScheduler {
             // 调用任务完成回调
             taskCompletionCallback?.invoke(task)
 
-            // 将子任务加入待执行队列
+            // 事件驱动：入度归零的子任务立即提交
             taskNode.children.forEach { childNode ->
-                if (childNode.isReady) {
-                    pendingTasks.offer(childNode)
+                if (childNode.inDegree.decrementAndGet() == 0) {
+                    dispatch(childNode)
                 }
             }
         } catch (e: Exception) {
@@ -198,7 +177,10 @@ internal class TaskScheduler {
             taskNode.status = TaskStatus.FAILED
             Log.e(TAG, "任务执行失败: ${task.name}", e)
         } finally {
-            runningTaskCount.decrementAndGet()
+            // 所有已提交任务都进入终态后唤醒等待方
+            if (runningTaskCount.decrementAndGet() == 0) {
+                completionSignal.complete(Unit)
+            }
         }
     }
     

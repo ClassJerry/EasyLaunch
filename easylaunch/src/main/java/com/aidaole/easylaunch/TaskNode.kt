@@ -1,5 +1,7 @@
 package com.aidaole.easylaunch
 
+import java.util.concurrent.atomic.AtomicInteger
+
 /**
  * 任务节点类
  * 用于构建有向无环图
@@ -7,8 +9,13 @@ package com.aidaole.easylaunch
 internal class TaskNode(
     val task: Task,
     val children: MutableList<TaskNode> = mutableListOf(),
-    val parents: MutableList<TaskNode> = mutableListOf()
 ) {
+    /**
+     * 入度：尚未完成的上游任务数量
+     * 归零表示依赖已满足，可以进入调度
+     */
+    val inDegree = AtomicInteger(0)
+
     /**
      * 任务状态
      */
@@ -25,7 +32,7 @@ internal class TaskNode(
      * 只有当所有父任务都已完成时，当前任务才可以执行
      */
     val isReady: Boolean
-        get() = parents.all { it.isFinished }
+        get() = inDegree.get() == 0
     
     /**
      * 添加子节点
@@ -36,17 +43,8 @@ internal class TaskNode(
         }
     }
     
-    /**
-     * 添加父节点
-     */
-    fun addParent(parent: TaskNode) {
-        if (!parents.contains(parent)) {
-            parents.add(parent)
-        }
-    }
-    
     override fun toString(): String {
-        return "TaskNode(task=${task.name}, status=$status, parents=${parents.map { it.task.name }}, children=${children.map { it.task.name }})"
+        return "TaskNode(task=${task.name}, status=$status, inDegree=${inDegree.get()}, children=${children.map { it.task.name }})"
     }
 }
 

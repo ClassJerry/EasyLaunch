@@ -49,8 +49,8 @@ internal class TaskGraph {
         
         // 清除现有的依赖关系
         nodes.values.forEach { node ->
-            node.parents.clear()
             node.children.clear()
+            node.inDegree.set(0)
         }
         
         // 重新构建所有依赖关系
@@ -63,9 +63,11 @@ internal class TaskGraph {
                 if (dependencyNode == null) {
                     Log.w(TAG, "依赖任务 $dependencyName 未找到，将被忽略。依赖此任务的是: ${task.javaClass.name}")
                 } else {
-                    // 建立父子关系
-                    dependencyNode.addChild(node)
-                    node.addParent(dependencyNode)
+                    // 建立父子关系，重复声明同一条依赖时只计一次入度
+                    if (!dependencyNode.children.contains(node)) {
+                        dependencyNode.addChild(node)
+                        node.inDegree.incrementAndGet()
+                    }
                 }
             }
         }
@@ -86,7 +88,7 @@ internal class TaskGraph {
         if (!dependenciesBuilt) {
             buildDependencies()
         }
-        return nodes.values.filter { it.parents.isEmpty() }
+        return nodes.values.filter { it.inDegree.get() == 0 }
     }
     
     /**
@@ -163,6 +165,7 @@ internal class TaskGraph {
      */
     fun reset() {
         nodes.values.forEach { it.status = TaskStatus.IDLE }
+        dependenciesBuilt = false
     }
     
     /**
