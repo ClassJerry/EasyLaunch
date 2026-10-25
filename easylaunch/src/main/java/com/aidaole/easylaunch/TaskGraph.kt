@@ -113,51 +113,40 @@ internal class TaskGraph {
     
     /**
      * 检测是否有环
-     * 使用DFS算法检测
+     * 使用Kahn算法检测
      */
     private fun hasCycle(): Boolean {
-        val visited = mutableSetOf<TaskNode>()
-        val inStack = mutableSetOf<TaskNode>()
-        
-        for (node in nodes.values) {
-            if (hasCycleDFS(node, visited, inStack)) {
-                return true
+        // 使用局部入度副本，避免在检测过程中污染节点上供调度使用的真实入度
+        val remainingInDegree = HashMap<TaskNode, Int>(nodes.size)
+        val queue = ArrayDeque<TaskNode>()
+
+        // 初始化：所有入度为0的节点入队
+        nodes.values.forEach { node ->
+            val degree = node.inDegree.get()
+            remainingInDegree[node] = degree
+            if (degree == 0) {
+                queue.addLast(node)
             }
         }
-        
-        return false
-    }
-    
-    private fun hasCycleDFS(
-        node: TaskNode,
-        visited: MutableSet<TaskNode>,
-        inStack: MutableSet<TaskNode>
-    ): Boolean {
-        // 如果节点已经在栈中，说明有环
-        if (inStack.contains(node)) {
-            return true
-        }
-        
-        // 如果节点已经访问过，且不在栈中，说明没有环
-        if (visited.contains(node)) {
-            return false
-        }
-        
-        // 标记节点为已访问，并加入栈中
-        visited.add(node)
-        inStack.add(node)
-        
-        // 递归检查所有子节点
-        for (child in node.children) {
-            if (hasCycleDFS(child, visited, inStack)) {
-                return true
+
+        var processedCount = 0
+
+        // 逐个出队并“删除”其出边：子节点入度减1，减到0则入队
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            processedCount++
+
+            node.children.forEach { child ->
+                val degree = (remainingInDegree[child] ?: 0) - 1
+                remainingInDegree[child] = degree
+                if (degree == 0) {
+                    queue.addLast(child)
+                }
             }
         }
-        
-        // 回溯时从栈中移除节点
-        inStack.remove(node)
-        
-        return false
+
+        // 仍有节点未被处理，说明这些节点的入度无法归零，即存在环
+        return processedCount < nodes.size
     }
     
     /**
