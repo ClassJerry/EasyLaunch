@@ -35,9 +35,9 @@ internal class TaskScheduler {
     private val isRunning = AtomicBoolean(false)
 
     /**
-     * 正在执行的任务数量
+     * 本轮尚未完成的任务数量，归零表示整张任务图已完成
      */
-    private val runningTaskCount = AtomicInteger(0)
+    private val remainingCount = AtomicInteger(0)
 
     /**
      * 本轮调度的完成信号
@@ -96,16 +96,16 @@ internal class TaskScheduler {
             // 构建任务依赖关系
             taskGraph.buildDependencies()
 
-            // 初始化本轮调度的执行计数与完成信号
-            runningTaskCount.set(0)
+            // 本轮所有任务都必须完成，因此以未完成任务数作为判断依据
+            val allNodes = taskGraph.getAllNodes()
+            remainingCount.set(allNodes.size)
             completionSignal = CompletableDeferred()
 
-            // 提交所有根任务，后续由任务完成事件驱动
-            val rootNodes = taskGraph.getRootNodes()
-            if (rootNodes.isNotEmpty()) {
-                rootNodes.forEach { dispatch(it) }
+            if (allNodes.isNotEmpty()) {
+                // 提交所有根任务，后续由任务完成事件驱动
+                taskGraph.getRootNodes().forEach { dispatch(it) }
 
-                // 等待所有任务执行完成
+                // 等待所有任务完成
                 completionSignal.await()
             }
             
@@ -119,10 +119,9 @@ internal class TaskScheduler {
 
     /**
      * 提交一个就绪任务
-     * 只负责启动，不等待其执行结束
+     * 只负责启动，不等待其执行完成
      */
     private fun dispatch(taskNode: TaskNode) {
-        runningTaskCount.incrementAndGet()
         scope.launch {
             executeTask(taskNode)
         }
@@ -162,9 +161,6 @@ internal class TaskScheduler {
             // 更新任务状态为已完成
             taskNode.status = TaskStatus.FINISHED
             Log.d(TAG, "任务执行完成: ${task.name}, 执行时长: ${executionTime}ms, 开始总时长: ${(taskEndTime - EasyLaunch.getInstance().startTime)}ms")
-            
-            // 调用任务完成回调
-            taskCompletionCallback?.invoke(task)
 
             // 事件驱动：入度归零的子任务立即提交
             taskNode.children.forEach { childNode ->
@@ -176,11 +172,50 @@ internal class TaskScheduler {
             // 更新任务状态为失败
             taskNode.status = TaskStatus.FAILED
             Log.e(TAG, "任务执行失败: ${task.name}", e)
+
+            // 失败传播：下游依赖永远无法满足，级联标记为跳过
+            skipDownstream(taskNode)
         } finally {
-            // 所有已提交任务都进入终态后唤醒等待方
-            if (runningTaskCount.decrementAndGet() == 0) {
-                completionSignal.complete(Unit)
+            // 节点完成后结算，最后一个节点结算时唤醒等待方
+            settle(taskNode)
+        }
+    }
+
+    /**
+     * 失败传播
+     * 将下游节点级联标记为 SKIPPED，保证整张任务图一定能完成
+     * 被跳过的节点从未被提交执行，因此需要在这里结算
+     */
+    private fun skipDownstream(taskNode: TaskNode) {
+        taskNode.children.forEach { childNode ->
+            // 状态已不是 IDLE 说明该节点已有结果，菱形依赖下会被多个失败分支重复到达
+            if (childNode.status != TaskStatus.IDLE) {
+                return@forEach
             }
+
+            childNode.status = TaskStatus.SKIPPED
+            settle(childNode)
+            Log.w(TAG, "上游任务失败，跳过任务: ${childNode.task.name}")
+
+            // 继续向下游传播
+            skipDownstream(childNode)
+        }
+    }
+
+    /**
+     * 结算一个已完成的任务
+     * 调用方保证每个任务在一轮调度中只会调用一次
+     */
+    private fun settle(taskNode: TaskNode) {
+        // 回调异常必须隔离，避免污染调度流程
+        try {
+            taskCompletionCallback?.invoke(taskNode.task)
+        } catch (e: Exception) {
+            Log.e(TAG, "任务完成回调执行异常: ${taskNode.task.name}", e)
+        }
+
+        if (remainingCount.decrementAndGet() == 0) {
+            completionSignal.complete(Unit)
         }
     }
     

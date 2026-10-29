@@ -61,7 +61,7 @@ class EasyLaunch private constructor() {
         private set(value) { field = value }
         
     /**
-     * 已完成的任务集合
+     * 已完成的任务集合，执行失败与因上游失败被跳过的任务同样计入
      */
     private val completedTasks = mutableSetOf<Class<out Task>>()
     

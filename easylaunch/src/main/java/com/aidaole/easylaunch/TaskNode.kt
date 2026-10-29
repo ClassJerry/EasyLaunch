@@ -70,5 +70,11 @@ enum class TaskStatus {
     /**
      * 执行失败
      */
-    FAILED
+    FAILED,
+
+    /**
+     * 被跳过
+     * 上游任务失败，导致当前任务的依赖永远无法满足，因此不会执行
+     */
+    SKIPPED
 } 
