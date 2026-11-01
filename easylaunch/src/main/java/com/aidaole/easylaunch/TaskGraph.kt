@@ -50,7 +50,7 @@ internal class TaskGraph {
         // 清除现有的依赖关系
         nodes.values.forEach { node ->
             node.children.clear()
-            node.inDegree.set(0)
+            node.inDegree = 0
         }
         
         // 重新构建所有依赖关系
@@ -66,7 +66,7 @@ internal class TaskGraph {
                     // 建立父子关系，重复声明同一条依赖时只计一次入度
                     if (!dependencyNode.children.contains(node)) {
                         dependencyNode.addChild(node)
-                        node.inDegree.incrementAndGet()
+                        node.inDegree++
                     }
                 }
             }
@@ -88,7 +88,7 @@ internal class TaskGraph {
         if (!dependenciesBuilt) {
             buildDependencies()
         }
-        return nodes.values.filter { it.inDegree.get() == 0 }
+        return nodes.values.filter { it.inDegree == 0 }
     }
     
     /**
@@ -122,7 +122,7 @@ internal class TaskGraph {
 
         // 初始化：所有入度为0的节点入队
         nodes.values.forEach { node ->
-            val degree = node.inDegree.get()
+            val degree = node.inDegree
             remainingInDegree[node] = degree
             if (degree == 0) {
                 queue.addLast(node)

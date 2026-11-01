@@ -8,7 +8,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 任务调度器
@@ -37,7 +36,7 @@ internal class TaskScheduler {
     /**
      * 本轮尚未完成的任务数量，归零表示整张任务图已完成
      */
-    private val remainingCount = AtomicInteger(0)
+    private var remainingCount = 0
 
     /**
      * 本轮调度的完成信号
@@ -98,7 +97,7 @@ internal class TaskScheduler {
 
             // 本轮所有任务都必须完成，因此以未完成任务数作为判断依据
             val allNodes = taskGraph.getAllNodes()
-            remainingCount.set(allNodes.size)
+            remainingCount = allNodes.size
             completionSignal = CompletableDeferred()
 
             if (allNodes.isNotEmpty()) {
@@ -164,7 +163,7 @@ internal class TaskScheduler {
 
             // 事件驱动：入度归零的子任务立即提交
             taskNode.children.forEach { childNode ->
-                if (childNode.inDegree.decrementAndGet() == 0) {
+                if (--childNode.inDegree == 0) {
                     dispatch(childNode)
                 }
             }
@@ -214,7 +213,7 @@ internal class TaskScheduler {
             Log.e(TAG, "任务完成回调执行异常: ${taskNode.task.name}", e)
         }
 
-        if (remainingCount.decrementAndGet() == 0) {
+        if (--remainingCount == 0) {
             completionSignal.complete(Unit)
         }
     }
